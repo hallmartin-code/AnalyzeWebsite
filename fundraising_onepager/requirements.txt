@@ -1,0 +1,14 @@
+# Anthropic API
+anthropic>=0.116.0
+
+# Deck parsing
+pdfplumber>=0.11.4        # PDF text + layout
+python-pptx>=1.0.2        # PPTX slides, shapes, notes
+
+# Website review
+requests>=2.32.3
+beautifulsoup4>=4.12.3
+lxml>=5.3.0               # faster//more tolerant parser for bs4
+
+# PDF output
+reportlab>=4.2.5

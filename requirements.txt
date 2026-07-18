@@ -1,0 +1,3 @@
+# Root requirements so Nixpacks detects Python from the repo root.
+# The real dependency list lives in the app subdirectory.
+-r analyzewebsite_web/requirements.txt

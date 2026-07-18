@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TEN Capital Website Analysis",
+  "description": "Structured payload the Python app fills, then renders to .docx using the TEN Capital footer standard. Mirrors website_analysis_template.md section-for-section.",
+  "type": "object",
+  "required": [
+    "company_name",
+    "analysis_date",
+    "executive_summary",
+    "scorecard",
+    "whats_working",
+    "gaps",
+    "improvements",
+    "financial_storytelling",
+    "reg_d",
+    "ux_enhancements",
+    "overall_assessment"
+  ],
+  "properties": {
+    "company_name": { "type": "string" },
+    "website_url": { "type": "string" },
+    "analysis_date": { "type": "string", "description": "Rendered into the footer: 'Compiled on <date> by TEN Capital Network'" },
+    "sector": { "type": "string", "description": "Drives sector-appropriate metric and category naming" },
+
+    "executive_summary": {
+      "type": "object",
+      "required": ["what_the_site_does_well", "who_the_site_serves", "readiness_score"],
+      "properties": {
+        "what_the_site_does_well": { "type": "string" },
+        "who_the_site_serves": { "type": "string", "description": "Current audience vs. fundraising audience" },
+        "readiness_score": { "type": "number", "minimum": 1, "maximum": 10 }
+      }
+    },
+
+    "scorecard": {
+      "type": "object",
+      "description": "Fixed category set. Every key required; no additions.",
+      "required": [
+        "scientific_technical_credibility",
+        "founder_credibility",
+        "product_positioning",
+        "market_opportunity_communication",
+        "commercialization_story",
+        "traction_evidence",
+        "investor_readiness",
+        "fundraising_supportiveness"
+      ],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^.*$": { "$ref": "#/$defs/rating" }
+      }
+    },
+
+    "whats_working": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 6,
+      "description": "Ordered strongest first",
+      "items": {
+        "type": "object",
+        "required": ["title", "body"],
+        "properties": {
+          "title": { "type": "string" },
+          "body": { "type": "string" },
+          "supporting_points": { "type": "array", "items": { "type": "string" } },
+          "callout": {
+            "type": "object",
+            "properties": {
+              "label": { "enum": ["Investor Takeaway", "Investor Signal"] },
+              "lead_in": { "type": "string" },
+              "points": { "type": "array", "items": { "type": "string" } },
+              "close": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "gaps": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 8,
+      "description": "Ordered by investor materiality, most material first",
+      "items": {
+        "type": "object",
+        "required": ["title", "framing", "missing_items"],
+        "properties": {
+          "title": { "type": "string" },
+          "framing": { "type": "string" },
+          "is_largest_concern": { "type": "boolean" },
+          "missing_items": { "type": "array", "items": { "type": "string" } },
+          "investor_question": { "type": "string" },
+          "resolution_note": { "type": "string" }
+        }
+      }
+    },
+
+    "narrative_probes": {
+      "type": "object",
+      "description": "Fixed 'Why X?' investor-narrative test",
+      "additionalProperties": false,
+      "properties": {
+        "why_now": { "$ref": "#/$defs/coverage" },
+        "why_this_team": { "$ref": "#/$defs/coverage" },
+        "why_this_market": { "$ref": "#/$defs/coverage" },
+        "why_this_product_wins": { "$ref": "#/$defs/coverage" },
+        "why_this_becomes_large": { "$ref": "#/$defs/coverage" }
+      }
+    },
+
+    "improvements": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 6,
+      "description": "Rendered as 'Priority #N: <title>'",
+      "items": {
+        "type": "object",
+        "required": ["title", "intro"],
+        "properties": {
+          "title": { "type": "string" },
+          "intro": { "type": "string" },
+          "suggested_sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "items": { "type": "array", "items": { "type": "string" } }
+              }
+            }
+          },
+          "example_block": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "commercial_proof_points": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 8,
+      "description": "Metric names only. Values are always format masks (XX, XX,XXX) — never invented figures.",
+      "items": {
+        "type": "object",
+        "required": ["metric", "example_format"],
+        "properties": {
+          "metric": { "type": "string" },
+          "example_format": { "type": "string", "pattern": "^[X,$%.0-9+ ]+$" }
+        }
+      }
+    },
+
+    "financial_storytelling": {
+      "type": "object",
+      "properties": {
+        "framing": { "type": "string" },
+        "commercial_milestones": { "type": "array", "items": { "type": "string" } },
+        "market_opportunity_points": { "type": "array", "items": { "type": "string" } },
+        "avoid": {
+          "type": "array",
+          "default": [
+            "Promises of investment returns",
+            "Forecasted investor gains",
+            "Promotional fundraising language"
+          ],
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "reg_d": {
+      "type": "object",
+      "description": "Boilerplate. Renders identically for every U.S. issuer; the app supplies only the applicable_rule flag and any jurisdiction note.",
+      "properties": {
+        "applicable_rule": { "enum": ["506(b)", "506(c)", "both", "n/a"] },
+        "jurisdiction_note": { "type": "string" }
+      }
+    },
+
+    "ux_enhancements": {
+      "type": "object",
+      "properties": {
+        "above_the_fold": {
+          "type": "object",
+          "properties": {
+            "current": { "type": "string" },
+            "proposed_headline": { "type": "string" },
+            "sub_claims": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "visual_hierarchy_observation": { "type": "string" },
+        "leadership_section_observation": { "type": "string" },
+        "milestone_timeline": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 6,
+          "description": "Only dates verifiable from the site or supplied source material",
+          "items": {
+            "type": "object",
+            "required": ["year", "milestone"],
+            "properties": {
+              "year": { "type": "string" },
+              "milestone": { "type": "string" }
+            }
+          }
+        },
+        "cta_observation": { "type": "string" },
+        "recommended_ctas": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "overall_assessment": {
+      "type": "object",
+      "required": ["current_position", "primary_weakness", "required_fixes", "target_score_range"],
+      "properties": {
+        "current_position": { "type": "string" },
+        "primary_weakness": { "type": "string" },
+        "required_fixes": { "type": "array", "minItems": 3, "maxItems": 6, "items": { "type": "string" } },
+        "target_score_range": { "type": "string", "description": "e.g. '8.5-9'" },
+        "target_investor_types": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+
+  "$defs": {
+    "rating": {
+      "enum": ["Strong", "Good", "Moderate", "Weak-Moderate", "Weak"]
+    },
+    "coverage": {
+      "enum": ["Addressed", "Partially addressed", "Not addressed", "Not quantified", "Missing"]
+    }
+  }
+}

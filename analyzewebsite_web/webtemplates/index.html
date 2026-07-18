@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Website Analysis — TEN Capital</title>
+<style>
+  :root {
+    --ink: #12161c; --muted: #5a6472; --accent: #1f4e79;
+    --rule: #d8dee6; --panel: #f4f6f9; --danger: #c0392b; --warn: #c8860d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.25rem 4rem;
+    font: 15px/1.55 "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: #fff;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.65rem; margin: 0 0 .3rem; color: var(--accent); letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 2rem; }
+  label { display: block; font-weight: 600; margin: 1.25rem 0 .35rem; font-size: .9rem; }
+  .hint { font-weight: 400; color: var(--muted); font-size: .82rem; }
+  input[type=text], input[type=url] {
+    width: 100%; padding: .7rem .8rem; font: inherit; color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 6px; background: #fff;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  button {
+    margin-top: 1.75rem; width: 100%; padding: .8rem 1rem;
+    font: 600 15px/1 inherit; color: #fff; background: var(--accent);
+    border: 0; border-radius: 6px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #17395a; }
+  button:disabled { background: #93a3b5; cursor: progress; }
+  .msg { padding: .8rem .9rem; border-radius: 6px; font-size: .9rem; margin-bottom: 1.5rem; }
+  .msg.error { background: #fdf2f1; border: 1px solid #f0c9c4; color: var(--danger); }
+  .msg.warn { background: #fdf8ec; border: 1px solid #eedbb0; color: var(--warn); }
+  .status { display: none; margin-top: 1rem; padding: .8rem .9rem; background: var(--panel);
+            border-radius: 6px; font-size: .88rem; color: var(--muted); }
+  .status.on { display: block; }
+  .steps { border-top: 1px solid var(--rule); margin-top: 2.5rem; padding-top: 1.25rem;
+           color: var(--muted); font-size: .85rem; }
+  .steps ol { margin: .5rem 0 0; padding-left: 1.2rem; }
+  .steps li { margin: .3rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Website Analysis</h1>
+  <p class="sub">Reviews a company's website from an investor's perspective and returns a
+     TEN Capital Website Analysis document.</p>
+
+  {% if error %}<div class="msg error">{{ error }}</div>{% endif %}
+  {% if not key_configured %}
+    <div class="msg warn">
+      No Anthropic API key is configured on this server. Set <code>ANTHROPIC_API_KEY</code>
+      in Railway → your service → Variables, then redeploy.
+    </div>
+  {% endif %}
+
+  <form method="post" action="/analyze" id="form">
+    <label for="url">Company website URL
+      <span class="hint">— the homepage; internal pages are found automatically</span></label>
+    <input type="text" id="url" name="url" required autofocus
+           placeholder="https://www.example.com"
+           value="{{ url or '' }}">
+
+    <label for="company_name">Company name
+      <span class="hint">— optional, inferred from the site when blank</span></label>
+    <input type="text" id="company_name" name="company_name"
+           placeholder="Acme Diagnostics"
+           value="{{ company_name or '' }}">
+
+    <button type="submit" id="go" {% if not key_configured %}disabled{% endif %}>
+      Generate analysis
+    </button>
+    <div class="status" id="status">
+      Crawling the site and running the analysis. This usually takes 60–120 seconds —
+      keep this tab open; the document will download automatically.
+    </div>
+  </form>
+
+  <div class="steps">
+    <strong>What happens</strong>
+    <ol>
+      <li>Fetches the homepage plus up to eight internal pages, favouring
+          about, team, product, evidence, news, and investor pages.</li>
+      <li>Scores eight fixed categories and identifies gaps, priorities,
+          Reg D posture, and UX fixes.</li>
+      <li>Renders a .docx with the TEN Capital footer, listing every page reviewed.</li>
+    </ol>
+    <p>Findings come only from pages the crawler could read. Client-side-rendered
+       content, PDFs, and anything behind a login are not reviewed.</p>
+  </div>
+</div>
+
+<script>
+  // The response is a file download, so the page never navigates. Show progress
+  // on submit and restore the button once the download has been handed off.
+  const form = document.getElementById('form');
+  const go = document.getElementById('go');
+  const status = document.getElementById('status');
+  form.addEventListener('submit', () => {
+    go.disabled = true;
+    go.textContent = 'Analyzing…';
+    status.classList.add('on');
+    // Errors re-render the page; a success leaves us here, so restore the form.
+    setTimeout(() => {
+      go.disabled = false;
+      go.textContent = 'Generate analysis';
+      status.classList.remove('on');
+    }, 180000);
+  });
+  window.addEventListener('pageshow', () => {
+    go.disabled = {{ 'true' if not key_configured else 'false' }};
+    go.textContent = 'Generate analysis';
+    status.classList.remove('on');
+  });
+</script>
+</body>
+</html>
