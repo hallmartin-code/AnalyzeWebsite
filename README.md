@@ -88,12 +88,27 @@ pages, ranked by path token — `investor`, `about`, `team`, `science`, `product
 between requests. Same-domain only; no PDFs, images, or other binaries. Every page fetched is
 listed in a "Pages Reviewed" section at the end of the document.
 
-**The analysis.** Model is `claude-sonnet-5`. The response is constrained with
-`output_config.format`, so the JSON is schema-valid on arrival — no "please return JSON"
-prompting and no defensive parsing. The rubric is cached with `cache_control`, so repeat runs
-pay roughly 10% for that prefix. The rubric forbids inventing any figure, and
-`commercial_proof_points` deliberately emits format masks (`XX`, `XX,XXX`) rather than values —
-that table tells the company what to publish, it does not report what they have.
+**The analysis — two calls, not one.** Model is `claude-sonnet-5`. Responses are constrained
+with `output_config.format`, so the JSON is schema-valid on arrival — no "please return JSON"
+prompting and no defensive parsing.
+
+A single schema covering the whole document was rejected with *"The compiled grammar is too
+large"*. It is now split: call 1 produces the assessment (summary, scorecard, strengths, gaps,
+narrative probes), call 2 produces the recommendations. Each grammar is ~60% smaller than the
+combined one. The split also improves grounding — call 2 receives call 1's findings and is told
+to write recommendations against *those* gaps rather than re-deriving them. The site content is
+identical in both calls and carries a `cache_control` breakpoint, so call 2 reads it at roughly
+a tenth of the input price.
+
+If you add fields later and the grammar error returns, the levers that bought the most room
+are in `analyzer/schema.py`: keyed objects whose values are enums (an 8-key scorecard becomes
+one array of `{category, rating}`) and objects nested inside array items (`callout`,
+`above_the_fold` were flattened into sibling fields). `merge_analysis()` rebuilds the nested
+shape afterwards, so `generator/docx_builder.py` never sees the flat wire format.
+
+The rubric forbids inventing any figure, and `commercial_proof_points` deliberately emits
+format masks (`XX`, `XX,XXX`) rather than values — that table tells the company what to
+publish, it does not report what they have.
 
 **The document.** Eight top-level sections in template order, five tables, and the TEN Capital
 footer from `CLAUDE.md`: Open Sans 7pt, centered, live `PAGE` field, logo at 0.67in × 0.25in.
