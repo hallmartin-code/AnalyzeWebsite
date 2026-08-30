@@ -12,10 +12,11 @@ import os
 import re
 
 from dotenv import load_dotenv
-from flask import Flask, make_response, render_template, request
+from flask import Flask, make_response, render_template, request, send_from_directory
 
 from analyzer import AnalyzerError, FetchError, analyze_site, fetch_site
 from generator import DocumentError, build_analysis_docx
+from notifier import analysis_recipients, email_configured, send_analysis_email_async
 
 load_dotenv()
 
@@ -44,14 +45,43 @@ def _key_configured() -> bool:
     return bool(os.getenv("ANTHROPIC_API_KEY"))
 
 
+@app.context_processor
+def _server_state():
+    """Configuration every render of index.html needs.
+
+    Read per request rather than at import: Railway variables can change under
+    a running container, and the template's warning banner should follow.
+    """
+    return {
+        "key_configured": _key_configured(),
+        "email_configured": email_configured(),
+        "email_to": ", ".join(analysis_recipients()),
+    }
+
+
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", key_configured=_key_configured(), error=None)
+    return render_template("index.html", error=None)
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """Serve the icon from the site root as well as /static.
+
+    index.html links the icon explicitly, but browsers still probe
+    /favicon.ico directly — for bookmarks, and on any page that is a bare
+    error response. Answering here keeps those out of the logs as 404s.
+    """
+    return send_from_directory(app.static_folder, "favicon.ico")
 
 
 @app.route("/healthz", methods=["GET"])
 def healthz():
-    return {"status": "ok", "key_configured": _key_configured()}, 200
+    return {
+        "status": "ok",
+        "key_configured": _key_configured(),
+        "email_configured": email_configured(),
+    }, 200
 
 
 @app.route("/analyze", methods=["POST"])
@@ -63,7 +93,6 @@ def analyze():
         return make_response(
             render_template(
                 "index.html",
-                key_configured=_key_configured(),
                 error=message,
                 url=url,
                 company_name=company_name,
@@ -103,8 +132,9 @@ def analyze():
         log.exception("unexpected analysis failure")
         return fail(f"Unexpected error during analysis: {exc}", 500)
 
+    analysis_date = _today()
     try:
-        docx_bytes = build_analysis_docx(data, analysis_date=_today())
+        docx_bytes = build_analysis_docx(data, analysis_date=analysis_date)
     except DocumentError as exc:
         return fail(str(exc), 500)
     except Exception as exc:  # noqa: BLE001
@@ -112,6 +142,19 @@ def analyze():
         return fail(f"Unexpected error building the document: {exc}", 500)
 
     filename = f"{_safe_filename(data.get('company_name') or company_name)}_Website_Analysis.docx"
+
+    # Fire-and-forget: the notification runs on a daemon thread, so a Resend
+    # outage can neither delay this download nor turn a good analysis into an
+    # error page.
+    send_analysis_email_async(
+        data,
+        docx_bytes,
+        filename=filename,
+        source_url=site.root_url or url,
+        analysis_date=analysis_date,
+        pages_reviewed=len(site.pages),
+    )
+
     response = make_response(docx_bytes)
     response.headers["Content-Type"] = DOCX_MIMETYPE
     response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
@@ -124,7 +167,6 @@ def too_large(_exc):
     return make_response(
         render_template(
             "index.html",
-            key_configured=_key_configured(),
             error="That request was too large.",
         ),
         413,

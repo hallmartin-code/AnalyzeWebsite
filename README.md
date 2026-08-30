@@ -23,21 +23,27 @@ The repo root is the deploy root — `Procfile`, `railway.json`, `requirements.t
 1. **Push this folder to a Git repo** (GitHub, GitLab).
 2. **Railway → New Project → Deploy from GitHub repo**, pick it. Nixpacks detects Python
    from the root `requirements.txt`, which re-includes `analyzewebsite_web/requirements.txt`.
-3. **Set the API key.** Railway → your service → **Variables** → New Variable:
+3. **Set the variables.** Railway → your service → **Variables** → New Variable:
 
-   | Name | Value |
-   |---|---|
-   | `ANTHROPIC_API_KEY` | `sk-ant-...` from <https://console.anthropic.com/settings/keys> |
+   | Name | Required | Value |
+   |---|---|---|
+   | `ANTHROPIC_API_KEY` | yes | `sk-ant-...` from <https://console.anthropic.com/settings/keys> |
+   | `RESEND_API_KEY` | for email | `re_...` from <https://resend.com/api-keys> |
+   | `ANALYSIS_EMAIL_TO` | no | Comma-separated. Defaults to `Info@tencapital.group` |
+   | `ANALYSIS_EMAIL_FROM` | no | Defaults to `TEN Capital Website Analyzer <analyzer@tencapital.group>` |
+   | `ANALYSIS_EMAIL_CC` | no | Comma-separated |
 
-   Never commit the key. `.env` is gitignored; `analyzewebsite_web/.env.example` shows the shape.
+   Never commit the keys. `.env` is gitignored; `analyzewebsite_web/.env.example` shows the shape.
 4. **Deploy.** Railway runs the start command from `railway.json`:
    ```
    gunicorn --chdir analyzewebsite_web app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 300
    ```
    The 300s timeout matters — a crawl plus analysis takes 60–120s and the default 30s would
    kill every request.
-5. **Verify.** `GET /healthz` returns `{"status":"ok","key_configured":true}`. If
-   `key_configured` is `false`, the variable did not land — check it and redeploy.
+5. **Verify.** `GET /healthz` returns
+   `{"status":"ok","key_configured":true,"email_configured":true}`. If `key_configured` is
+   `false`, the variable did not land — check it and redeploy. `email_configured` false just
+   means result emails are off; analysis still works.
 6. **Settings → Networking → Generate Domain** for a public URL.
 
 ### Changing the key later
@@ -63,6 +69,10 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 python analyzewebsite_web/app.py   # http://localhost:5000
 ```
 
+Result emails are configured in `analyzewebsite_web/.env` (gitignored, loaded by
+`load_dotenv()`); copy `.env.example` and fill in `RESEND_API_KEY`. Omit it to run without
+sending mail.
+
 `gunicorn` does not run on Windows (it needs `fcntl`). Use `app.py` directly for local
 development; Railway runs Linux, where the Procfile command works.
 
@@ -77,9 +87,21 @@ app.py                     Flask: GET / form, POST /analyze -> .docx download
   analyzer/schema.py         JSON Schema sent as output_config.format
   analyzer/claude_analyzer.py Anthropic call + response normalization
   generator/docx_builder.py  python-docx render, TEN Capital footer
+  notifier/resend_mailer.py  result email + .docx attachment via Resend
   webtemplates/index.html    the single page
-  assets/                    TEN_Capital_logo_footer.png
+  static/                    generated favicon set (committed)
+  assets/                    TEN_Capital_logo_footer.png, ten_capital_mark.png
+tools/make_favicon.py      regenerates static/ from the brand mark
 ```
+
+**The favicon.** `assets/ten_capital_mark.png` is the source of truth; everything in
+`static/` derives from it via `python tools/make_favicon.py`, so the tab icon cannot drift
+from the brand. The generator matches the one used by the sibling TEN Capital tools — same
+artwork, same 6% clear space, same file names — so a tab reads identically whichever tool it
+is showing. Pillow is needed only to run that script and is deliberately not in
+`requirements.txt`; the app just serves the committed files. `index.html` links the `.ico`,
+the `.svg`, and the Apple touch icon, and `/favicon.ico` is also served from the site root so
+browser probes do not show up as 404s.
 
 **The crawl.** The homepage alone cannot answer "is there an Investor Relations section?"
 or "are there leadership bios?", so the fetcher pulls the homepage plus up to eight internal
@@ -112,6 +134,22 @@ publish, it does not report what they have.
 
 **The document.** Eight top-level sections in template order, five tables, and the TEN Capital
 footer from `CLAUDE.md`: Open Sans 7pt, centered, live `PAGE` field, logo at 0.67in × 0.25in.
+
+**The result email.** Every completed analysis is also mailed to `ANALYSIS_EMAIL_TO`
+(`Info@tencapital.group` by default) through Resend, with the `.docx` attached and an HTML
+summary in the body: readiness score, the eight-category scorecard, narrative coverage, the
+gaps with the largest concern flagged first, the priority recommendations, and the overall
+assessment. All styling is inline — no external CSS, no images, no tracking pixel — so it
+renders the same in Outlook and Gmail, and a plain-text alternative ships alongside it.
+
+The send is a side effect, never a dependency. `send_analysis_email_async()` hands the work to
+a daemon thread, so a Resend outage or a bad key cannot delay the download or turn a good
+analysis into an error page; failures land in the logs as
+`analysis email failed: ...` and nothing else changes. Leaving `RESEND_API_KEY` unset disables
+notification cleanly.
+
+The sender domain must be verified at <https://resend.com/domains> — `tencapital.group` is,
+so any local part on it works as `ANALYSIS_EMAIL_FROM`.
 
 ---
 

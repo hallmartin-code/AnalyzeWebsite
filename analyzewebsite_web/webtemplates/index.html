@@ -3,119 +3,405 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Website Analysis — TEN Capital</title>
+<title>Website Analysis — TEN Capital Network</title>
+<link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" sizes="32x32">
+<link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --ink: #12161c; --muted: #5a6472; --accent: #1f4e79;
-    --rule: #d8dee6; --panel: #f4f6f9; --danger: #c0392b; --warn: #c8860d;
+  :root{
+    --navy-950:#0B1526; --navy-900:#101E33; --navy-800:#16283F; --navy-700:#1E354F;
+    --coral:#EE5A4E; --coral-soft:#F0776C; --amber:#F3A22A; --teal:#35BEBB;
+    --ink-100:#F3F6FA; --ink-300:#C4D0E0; --ink-500:#7E90A8; --ink-600:#5C6E86;
+
+    --sans:'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --display:'Sora', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --mono:'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 2.5rem 1.25rem 4rem;
-    font: 15px/1.55 "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: var(--ink); background: #fff;
+
+  *{ box-sizing:border-box; }
+
+  html, body{
+    margin:0; padding:0;
+    background:var(--navy-950); color:var(--ink-100);
+    font-family:var(--sans);
+    min-height:100vh;
   }
-  .wrap { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 1.65rem; margin: 0 0 .3rem; color: var(--accent); letter-spacing: -.01em; }
-  .sub { color: var(--muted); margin: 0 0 2rem; }
-  label { display: block; font-weight: 600; margin: 1.25rem 0 .35rem; font-size: .9rem; }
-  .hint { font-weight: 400; color: var(--muted); font-size: .82rem; }
-  input[type=text], input[type=url] {
-    width: 100%; padding: .7rem .8rem; font: inherit; color: var(--ink);
-    border: 1px solid var(--rule); border-radius: 6px; background: #fff;
+
+  body{
+    display:flex; align-items:center; justify-content:center;
+    padding:48px 20px; position:relative; overflow-x:hidden;
   }
-  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
-  button {
-    margin-top: 1.75rem; width: 100%; padding: .8rem 1rem;
-    font: 600 15px/1 inherit; color: #fff; background: var(--accent);
-    border: 0; border-radius: 6px; cursor: pointer;
+
+  /* Ambient tri-colour glow, echoing the three figures in the mark. */
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      radial-gradient(480px 380px at 14% 8%, rgba(238,90,78,0.16), transparent 60%),
+      radial-gradient(480px 380px at 86% 6%, rgba(243,162,42,0.13), transparent 60%),
+      radial-gradient(560px 420px at 50% 100%, rgba(53,190,187,0.14), transparent 60%);
   }
-  button:hover:not(:disabled) { background: #17395a; }
-  button:disabled { background: #93a3b5; cursor: progress; }
-  .msg { padding: .8rem .9rem; border-radius: 6px; font-size: .9rem; margin-bottom: 1.5rem; }
-  .msg.error { background: #fdf2f1; border: 1px solid #f0c9c4; color: var(--danger); }
-  .msg.warn { background: #fdf8ec; border: 1px solid #eedbb0; color: var(--warn); }
-  .status { display: none; margin-top: 1rem; padding: .8rem .9rem; background: var(--panel);
-            border-radius: 6px; font-size: .88rem; color: var(--muted); }
-  .status.on { display: block; }
-  .steps { border-top: 1px solid var(--rule); margin-top: 2.5rem; padding-top: 1.25rem;
-           color: var(--muted); font-size: .85rem; }
-  .steps ol { margin: .5rem 0 0; padding-left: 1.2rem; }
-  .steps li { margin: .3rem 0; }
+
+  .stage{ position:relative; z-index:1; width:100%; max-width:620px; }
+
+  /* ------------------------------------------------------------- brand */
+
+  .brand{
+    display:flex; align-items:center; gap:12px;
+    margin-bottom:28px; padding-left:4px;
+  }
+  .brand-mark{ width:34px; height:34px; flex-shrink:0; }
+  .brand-word{
+    font-family:var(--display); font-weight:800; font-size:15px;
+    letter-spacing:0.04em; line-height:1.15; text-transform:uppercase;
+  }
+  .brand-word span{
+    display:block; font-weight:600; font-size:10px;
+    letter-spacing:0.22em; color:var(--ink-500); margin-top:2px;
+  }
+
+  /* -------------------------------------------------------------- card */
+
+  .card{
+    background:linear-gradient(180deg, var(--navy-900) 0%, var(--navy-800) 100%);
+    border:1px solid var(--navy-700); border-radius:20px;
+    padding:44px 44px 36px;
+    box-shadow:0 30px 60px -20px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.03);
+    position:relative; overflow:hidden;
+  }
+  .card::after{
+    content:""; position:absolute; top:-2px; left:44px; right:44px; height:2px;
+    background:linear-gradient(90deg, var(--coral), var(--amber), var(--teal));
+    border-radius:2px;
+  }
+
+  .eyebrow{
+    display:flex; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:11px; letter-spacing:0.14em;
+    text-transform:uppercase; color:var(--teal); margin-bottom:14px;
+  }
+  .eyebrow::before{
+    content:""; width:6px; height:6px; border-radius:50%;
+    background:var(--teal); box-shadow:0 0 0 3px rgba(53,190,187,0.18);
+  }
+
+  h1{
+    font-family:var(--display); font-size:28px; font-weight:700;
+    line-height:1.25; margin:0 0 12px; letter-spacing:-0.01em;
+  }
+  h1 .arrow{ color:var(--ink-500); font-weight:400; margin:0 4px; }
+  h1 .to{
+    background:linear-gradient(90deg, var(--coral-soft), var(--amber));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+
+  .lede{
+    color:var(--ink-300); font-size:15px; line-height:1.6;
+    margin:0 0 28px; max-width:46ch;
+  }
+
+  /* ------------------------------------------------------------ notices */
+
+  .msg{
+    display:flex; gap:10px; align-items:flex-start;
+    padding:13px 15px; border-radius:11px; margin-bottom:22px;
+    font-size:13.5px; line-height:1.55;
+  }
+  .msg::before{ font-family:var(--mono); font-weight:500; line-height:1.55; }
+  .msg.error{
+    background:rgba(238,90,78,0.10); border:1px solid rgba(238,90,78,0.35);
+    color:#FFC7C1;
+  }
+  .msg.error::before{ content:"!"; color:var(--coral); }
+  .msg.warn{
+    background:rgba(243,162,42,0.09); border:1px solid rgba(243,162,42,0.32);
+    color:#F8DDAE;
+  }
+  .msg.warn::before{ content:"!"; color:var(--amber); }
+  .msg code{
+    font-family:var(--mono); font-size:12px;
+    background:rgba(11,21,38,0.6); padding:1px 5px; border-radius:4px;
+  }
+
+  /* ------------------------------------------------------------- fields */
+
+  .field{ margin-bottom:16px; }
+
+  .field label{
+    display:block; margin-bottom:7px;
+    font-family:var(--mono); font-size:10.5px; letter-spacing:0.12em;
+    text-transform:uppercase; color:var(--ink-500);
+  }
+  .field label .opt{ color:var(--ink-600); text-transform:none; letter-spacing:0.02em; }
+
+  .field input{
+    width:100%; padding:14px 15px;
+    font-family:var(--sans); font-size:15px; color:var(--ink-100);
+    background:rgba(255,255,255,0.02);
+    border:1px solid var(--navy-700); border-radius:12px;
+    transition:border-color .18s ease, background .18s ease, box-shadow .18s ease;
+  }
+  .field input::placeholder{ color:var(--ink-600); }
+  .field input:hover{ border-color:#2A4667; }
+  .field input:focus-visible{
+    outline:none; border-color:var(--teal);
+    background:rgba(53,190,187,0.05);
+    box-shadow:0 0 0 3px rgba(53,190,187,0.18);
+  }
+
+  .field .help{
+    margin-top:6px; font-size:12px; line-height:1.5; color:var(--ink-600);
+  }
+
+  /* ---------------------------------------------------------------- CTA */
+
+  .cta{
+    width:100%; margin-top:22px; padding:16px 20px;
+    border:none; border-radius:12px;
+    background:linear-gradient(90deg, var(--coral) 0%, var(--coral-soft) 45%, var(--amber) 100%);
+    color:#17130E;
+    font-family:var(--display); font-weight:700; font-size:15px; letter-spacing:0.01em;
+    cursor:pointer;
+    transition:filter .15s ease, transform .15s ease;
+    box-shadow:0 10px 24px -10px rgba(238,90,78,0.45);
+  }
+  .cta:hover:not(:disabled){ filter:brightness(1.06); transform:translateY(-1px); }
+  .cta:active:not(:disabled){ transform:translateY(0); }
+  .cta:focus-visible{ outline:2px solid var(--teal); outline-offset:3px; }
+  .cta:disabled{
+    cursor:default; transform:none; box-shadow:none;
+    background:var(--navy-700); color:var(--ink-500);
+  }
+  .cta.working{
+    cursor:progress;
+    background:var(--navy-700); color:var(--ink-300);
+    box-shadow:none;
+  }
+
+  /* ----------------------------------------------------------- progress */
+  /* The analysis takes 60-120s and the response is a file download, so the
+     page never navigates. Without a live indicator the UI looks hung. */
+
+  .progress{ display:none; margin-top:18px; }
+  .progress.on{ display:block; }
+
+  .progress-track{
+    height:3px; border-radius:3px; overflow:hidden;
+    background:var(--navy-700);
+  }
+  .progress-bar{
+    height:100%; width:36%; border-radius:3px;
+    background:linear-gradient(90deg, var(--coral), var(--amber), var(--teal));
+    animation:slide 1.7s ease-in-out infinite;
+  }
+  @keyframes slide{
+    0%{ transform:translateX(-100%); }
+    100%{ transform:translateX(380%); }
+  }
+
+  .progress-note{
+    display:flex; justify-content:space-between; gap:12px;
+    margin-top:10px; font-size:12.5px; line-height:1.55; color:var(--ink-500);
+  }
+  .progress-note .elapsed{
+    font-family:var(--mono); color:var(--ink-300); flex-shrink:0;
+    font-variant-numeric:tabular-nums;
+  }
+
+  /* --------------------------------------------------------- disclosure */
+
+  .disclosure{
+    margin-top:24px; padding-top:18px;
+    border-top:1px solid var(--navy-700);
+    font-size:12px; line-height:1.6; color:var(--ink-500);
+  }
+  .disclosure code{
+    font-family:var(--mono); font-size:11.5px;
+    background:var(--navy-950); border:1px solid var(--navy-700);
+    color:var(--ink-300); padding:2px 6px; border-radius:5px;
+  }
+
+  details.method{ margin-top:14px; }
+  details.method summary{
+    cursor:pointer; list-style:none;
+    font-family:var(--mono); font-size:11px; letter-spacing:0.1em;
+    text-transform:uppercase; color:var(--ink-500);
+    display:flex; align-items:center; gap:7px;
+  }
+  details.method summary::-webkit-details-marker{ display:none; }
+  details.method summary::before{
+    content:"+"; color:var(--teal); font-size:13px; line-height:1;
+  }
+  details.method[open] summary::before{ content:"–"; }
+  details.method summary:hover{ color:var(--ink-300); }
+  details.method summary:focus-visible{ outline:2px solid var(--teal); outline-offset:3px; border-radius:3px; }
+  details.method ol{
+    margin:12px 0 0; padding-left:18px;
+    font-size:12.5px; line-height:1.65; color:var(--ink-500);
+  }
+  details.method li{ margin:0 0 6px; }
+  details.method p{ margin:10px 0 0; font-size:12.5px; line-height:1.6; color:var(--ink-600); }
+
+  footer{
+    text-align:center; margin-top:22px;
+    font-family:var(--mono); font-size:11px; letter-spacing:0.08em;
+    color:var(--ink-600); text-transform:uppercase;
+  }
+
+  @media (max-width:480px){
+    body{ padding:32px 14px; }
+    .card{ padding:32px 24px 28px; }
+    .card::after{ left:24px; right:24px; }
+    h1{ font-size:23px; }
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *, *::before, *::after{
+      animation-duration:.001ms !important; animation-iteration-count:1 !important;
+      transition-duration:.001ms !important;
+    }
+    .progress-bar{ width:100%; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>Website Analysis</h1>
-  <p class="sub">Reviews a company's website from an investor's perspective and returns a
-     TEN Capital Website Analysis document.</p>
 
-  {% if error %}<div class="msg error">{{ error }}</div>{% endif %}
-  {% if not key_configured %}
-    <div class="msg warn">
-      No Anthropic API key is configured on this server. Set <code>ANTHROPIC_API_KEY</code>
-      in Railway → your service → Variables, then redeploy.
-    </div>
-  {% endif %}
+<div class="stage">
 
-  <form method="post" action="/analyze" id="form">
-    <label for="url">Company website URL
-      <span class="hint">— the homepage; internal pages are found automatically</span></label>
-    <input type="text" id="url" name="url" required autofocus
-           placeholder="https://www.example.com"
-           value="{{ url or '' }}">
-
-    <label for="company_name">Company name
-      <span class="hint">— optional, inferred from the site when blank</span></label>
-    <input type="text" id="company_name" name="company_name"
-           placeholder="Acme Diagnostics"
-           value="{{ company_name or '' }}">
-
-    <button type="submit" id="go" {% if not key_configured %}disabled{% endif %}>
-      Generate analysis
-    </button>
-    <div class="status" id="status">
-      Crawling the site and running the analysis. This usually takes 60–120 seconds —
-      keep this tab open; the document will download automatically.
-    </div>
-  </form>
-
-  <div class="steps">
-    <strong>What happens</strong>
-    <ol>
-      <li>Fetches the homepage plus up to eight internal pages, favouring
-          about, team, product, evidence, news, and investor pages.</li>
-      <li>Scores eight fixed categories and identifies gaps, priorities,
-          Reg D posture, and UX fixes.</li>
-      <li>Renders a .docx with the TEN Capital footer, listing every page reviewed.</li>
-    </ol>
-    <p>Findings come only from pages the crawler could read. Client-side-rendered
-       content, PDFs, and anything behind a login are not reviewed.</p>
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TEN Capital Network">
+      <path d="M50 6 C64 6 74 16 74 16" stroke="var(--amber)" stroke-width="11" stroke-linecap="round" fill="none"/>
+      <path d="M76 66 C76 82 63 92 63 92" stroke="var(--teal)" stroke-width="11" stroke-linecap="round" fill="none"/>
+      <path d="M24 66 C24 82 37 92 37 92" stroke="var(--coral)" stroke-width="11" stroke-linecap="round" fill="none" transform="rotate(180 50 79)"/>
+      <circle cx="50" cy="20" r="11" fill="var(--amber)"/>
+      <circle cx="78" cy="68" r="11" fill="var(--teal)"/>
+      <circle cx="22" cy="68" r="11" fill="var(--coral)"/>
+    </svg>
+    <div class="brand-word">Ten Capital<span>Network</span></div>
   </div>
+
+  <div class="card">
+    <div class="eyebrow">Website Analyzer</div>
+    <h1>Company Site<span class="arrow">&rarr;</span><span class="to">Investor Analysis</span></h1>
+    <p class="lede">Enter a company's homepage and get a TEN Capital Website Analysis
+       document — scored, gap-mapped, and structured by Claude.</p>
+
+    {% if error %}<div class="msg error">{{ error }}</div>{% endif %}
+    {% if not key_configured %}
+      <div class="msg warn">
+        No Anthropic API key is configured on this server. Set <code>ANTHROPIC_API_KEY</code>
+        in Railway &rarr; your service &rarr; Variables, then redeploy.
+      </div>
+    {% endif %}
+
+    <form method="post" action="/analyze" id="form">
+      <div class="field">
+        <label for="url">Company website URL</label>
+        <input type="text" id="url" name="url" required autofocus
+               inputmode="url" autocomplete="url" spellcheck="false"
+               placeholder="https://www.example.com"
+               value="{{ url or '' }}">
+        <div class="help">The homepage — internal pages are found automatically.</div>
+      </div>
+
+      <div class="field">
+        <label for="company_name">Company name <span class="opt">— optional</span></label>
+        <input type="text" id="company_name" name="company_name"
+               autocomplete="organization"
+               placeholder="Acme Diagnostics"
+               value="{{ company_name or '' }}">
+        <div class="help">Inferred from the site when left blank.</div>
+      </div>
+
+      <button class="cta" type="submit" id="go" {% if not key_configured %}disabled{% endif %}>
+        Generate analysis
+      </button>
+
+      <div class="progress" id="progress" role="status" aria-live="polite">
+        <div class="progress-track"><div class="progress-bar"></div></div>
+        <div class="progress-note">
+          <span>Crawling the site and running the analysis. Keep this tab open — the
+                document downloads automatically.</span>
+          <span class="elapsed" id="elapsed">0:00</span>
+        </div>
+      </div>
+    </form>
+
+    <div class="disclosure">
+      {% if email_configured %}
+        The analysis is returned as a <code>.docx</code> download, and a copy of every
+        one is emailed to <code>{{ email_to }}</code>.
+      {% else %}
+        The analysis is returned as a <code>.docx</code> download. Result emails are
+        switched off — set <code>RESEND_API_KEY</code> to enable them.
+      {% endif %}
+
+      <details class="method">
+        <summary>What happens</summary>
+        <ol>
+          <li>Fetches the homepage plus up to eight internal pages, favouring
+              about, team, product, evidence, news, and investor pages.</li>
+          <li>Scores eight fixed categories and identifies gaps, priorities,
+              Reg D posture, and UX fixes.</li>
+          <li>Renders a .docx with the TEN Capital footer, listing every page reviewed.</li>
+        </ol>
+        <p>Findings come only from pages the crawler could read. Client-side-rendered
+           content, PDFs, and anything behind a login are not reviewed.</p>
+      </details>
+    </div>
+  </div>
+
+  <footer>Powered by TEN Capital Network</footer>
+
 </div>
 
 <script>
-  // The response is a file download, so the page never navigates. Show progress
-  // on submit and restore the button once the download has been handed off.
-  const form = document.getElementById('form');
-  const go = document.getElementById('go');
-  const status = document.getElementById('status');
-  form.addEventListener('submit', () => {
-    go.disabled = true;
-    go.textContent = 'Analyzing…';
-    status.classList.add('on');
-    // Errors re-render the page; a success leaves us here, so restore the form.
-    setTimeout(() => {
-      go.disabled = false;
-      go.textContent = 'Generate analysis';
-      status.classList.remove('on');
-    }, 180000);
-  });
-  window.addEventListener('pageshow', () => {
-    go.disabled = {{ 'true' if not key_configured else 'false' }};
-    go.textContent = 'Generate analysis';
-    status.classList.remove('on');
-  });
+  // A success is a file download, so the page never navigates and we get no
+  // load event to react to. Drive the indicator on a timer instead, and restore
+  // the form after the server's own ceiling so a stuck run cannot strand it.
+  (function () {
+    const form = document.getElementById('form');
+    const go = document.getElementById('go');
+    const progress = document.getElementById('progress');
+    const elapsed = document.getElementById('elapsed');
+    const keyConfigured = {{ 'true' if key_configured else 'false' }};
+    const IDLE_LABEL = 'Generate analysis';
+    let ticker = null;
+    let reset = null;
+
+    function stop() {
+      clearInterval(ticker);
+      clearTimeout(reset);
+      go.disabled = !keyConfigured;
+      go.classList.remove('working');
+      go.textContent = IDLE_LABEL;
+      progress.classList.remove('on');
+      elapsed.textContent = '0:00';
+    }
+
+    form.addEventListener('submit', () => {
+      const started = Date.now();
+      go.disabled = true;
+      go.classList.add('working');
+      go.textContent = 'Analyzing…';
+      progress.classList.add('on');
+
+      ticker = setInterval(() => {
+        const s = Math.floor((Date.now() - started) / 1000);
+        elapsed.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+      }, 1000);
+
+      // Matches the gunicorn --timeout 300 ceiling; an error instead re-renders
+      // the page, which resets everything anyway.
+      reset = setTimeout(stop, 300000);
+    });
+
+    // Restores the form when the browser serves this page from the back/forward
+    // cache after a download.
+    window.addEventListener('pageshow', stop);
+  })();
 </script>
 </body>
 </html>
