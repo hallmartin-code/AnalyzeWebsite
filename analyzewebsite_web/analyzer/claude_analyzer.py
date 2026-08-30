@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+import time
 
 import anthropic
 
@@ -25,6 +27,40 @@ from .site_fetcher import SiteContent
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 8_000
 EFFORT = "medium"
+
+# --------------------------------------------------------------- retry policy
+#
+# A 500 from the API is Anthropic's side, not ours, and it is nearly always
+# transient — so it is worth waiting out rather than throwing away a crawl and
+# (on the second call) a completed, already-billed first call.
+#
+# Two tiers, because they cover different failure shapes:
+#
+#   1. The SDK retries 408/409/429/5xx itself, fast and with exponential
+#      backoff, honouring `retry-after`. That handles a single bad routing
+#      attempt. The default is 2 retries; 3 costs nothing when calls succeed.
+#   2. _call adds slower whole-call attempts on top, for a blip that outlives
+#      the SDK's burst — the case that produced "API error 500" here.
+SDK_MAX_RETRIES = 3
+TRANSIENT_ATTEMPTS = 3
+BACKOFF_SECONDS = (3.0, 8.0)
+
+# Wall-clock ceiling for both analysis calls together. gunicorn kills the worker
+# at 300s and the crawl may already have spent 75s, so retrying past this trades
+# a useful error page for a dead connection. A call needs roughly this long to
+# have any chance of finishing, so we do not start one without room for it.
+ANALYSIS_BUDGET = 190.0
+MIN_CALL_SECONDS = 35.0
+
+# Infrastructure failures worth a second look. RateLimitError is deliberately
+# absent: the SDK already waited out `retry-after`, and a 429 that survives that
+# needs a human, not a tighter loop. APITimeoutError subclasses
+# APIConnectionError, so it is covered.
+_TRANSIENT = (
+    anthropic.InternalServerError,  # 500-599 other than 529
+    anthropic.OverloadedError,      # 529 — sibling of the above, not a subclass
+    anthropic.APIConnectionError,
+)
 
 log = logging.getLogger("analyzewebsite.claude")
 
@@ -37,6 +73,7 @@ def analyze_site(site: SiteContent, company_name: str | None = None) -> dict:
     """Run both calls and return the merged, normalized analysis."""
     client = _client()
     site_text = site.as_prompt_text()
+    deadline = time.monotonic() + ANALYSIS_BUDGET
 
     if company_name:
         naming = f"The company is called {company_name}. Use this exact name in `company_name`."
@@ -57,6 +94,7 @@ def analyze_site(site: SiteContent, company_name: str | None = None) -> dict:
             "the five narrative probes."
         ),
         label="assessment",
+        deadline=deadline,
     )
 
     findings = _findings_digest(assessment)
@@ -72,12 +110,115 @@ def analyze_site(site: SiteContent, company_name: str | None = None) -> dict:
             f"{findings}"
         ),
         label="recommendations",
+        deadline=deadline,
     )
 
     return _normalize(merge_analysis(assessment, recommendations), site)
 
 
-def _call(client, *, system: str, schema: dict, site_text: str, instruction: str, label: str) -> dict:
+def _call(
+    client,
+    *,
+    system: str,
+    schema: dict,
+    site_text: str,
+    instruction: str,
+    label: str,
+    deadline: float,
+) -> dict:
+    """One analysis step, retried past a transient failure on Anthropic's side.
+
+    Only the infrastructure failures in _TRANSIENT are retried. Everything else
+    — a rejected schema, a bad key, a refusal — fails the same way on attempt
+    two as on attempt one, so retrying it would only spend the user's time.
+    """
+    last: Exception | None = None
+
+    for attempt in range(1, TRANSIENT_ATTEMPTS + 1):
+        try:
+            return _request(
+                client,
+                system=system,
+                schema=schema,
+                site_text=site_text,
+                instruction=instruction,
+                label=label,
+            )
+        except _TRANSIENT as exc:
+            last = exc
+            pause = BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
+            pause += random.uniform(0, 1)  # de-sync concurrent workers
+            remaining = deadline - time.monotonic()
+
+            if attempt == TRANSIENT_ATTEMPTS:
+                log.warning("%s: %s — out of attempts", label, _describe(exc))
+                break
+            if remaining < pause + MIN_CALL_SECONDS:
+                log.warning(
+                    "%s: %s — %.0fs left, not enough to retry",
+                    label,
+                    _describe(exc),
+                    remaining,
+                )
+                break
+
+            log.warning(
+                "%s: %s — retrying in %.1fs (attempt %d of %d)",
+                label,
+                _describe(exc),
+                pause,
+                attempt,
+                TRANSIENT_ATTEMPTS,
+            )
+            time.sleep(pause)
+
+    raise AnalyzerError(_transient_message(last, label)) from last
+
+
+def _describe(exc: Exception) -> str:
+    """One-line log form of an API failure, carrying the request id when there is one."""
+    status = getattr(exc, "status_code", None)
+    request_id = getattr(exc, "request_id", None)
+    parts = [f"HTTP {status}" if status else type(exc).__name__]
+    message = str(getattr(exc, "message", "") or exc).strip()
+    if message:
+        parts.append(message)
+    if request_id:
+        parts.append(f"request_id={request_id}")
+    return " ".join(parts)
+
+
+def _transient_message(exc: Exception | None, label: str) -> str:
+    """What the user is told when the retries ran out.
+
+    Names Anthropic as the source. The previous wording — "Anthropic API error
+    500: Internal server error" — read as though the site being analyzed, or
+    this app, had done something wrong.
+    """
+    if isinstance(exc, anthropic.APITimeoutError):
+        return (
+            f"The {label} step timed out. The site may be large enough that the "
+            "analysis cannot finish in time — try again, or use a smaller site."
+        )
+    if isinstance(exc, anthropic.APIConnectionError):
+        return (
+            f"Could not reach the Anthropic API during the {label} step. Check the "
+            "server's network connection and try again."
+        )
+
+    status = getattr(exc, "status_code", None)
+    request_id = getattr(exc, "request_id", None)
+    detail = f" Request ID {request_id}." if request_id else ""
+    busy = "is temporarily overloaded" if status == 529 else "had an internal error"
+    return (
+        f"The Anthropic API {busy} (HTTP {status}) and did not recover after "
+        f"{TRANSIENT_ATTEMPTS} attempts, so the {label} step could not finish. "
+        f"This is a fault on Anthropic's side, not a problem with the site you "
+        f"entered. Please try again in a few minutes.{detail}"
+    )
+
+
+def _request(client, *, system: str, schema: dict, site_text: str, instruction: str, label: str) -> dict:
     """One schema-constrained request. Site content is cached across calls."""
     try:
         response = client.messages.create(
@@ -124,10 +265,13 @@ def _call(client, *, system: str, schema: dict, site_text: str, instruction: str
         raise AnalyzerError(
             "The Anthropic API rate limit was hit. Wait a minute and try again."
         ) from exc
+    except _TRANSIENT:
+        # Anthropic's side and probably momentary. _call owns the decision to
+        # wait and try again, so this must stay an exception, not a message.
+        # Listed before APIStatusError, which would otherwise swallow the 5xx.
+        raise
     except anthropic.APIStatusError as exc:
         raise AnalyzerError(f"Anthropic API error {exc.status_code}: {exc.message}") from exc
-    except anthropic.APIConnectionError as exc:
-        raise AnalyzerError(f"Could not reach the Anthropic API: {exc}") from exc
 
     if response.stop_reason == "refusal":
         raise AnalyzerError(f"The model declined the {label} step for this site.")
@@ -188,7 +332,7 @@ def _client() -> anthropic.Anthropic:
             "ANTHROPIC_API_KEY is not configured on the server. Add it in "
             "Railway → your service → Variables, then redeploy."
         )
-    return anthropic.Anthropic()
+    return anthropic.Anthropic(max_retries=SDK_MAX_RETRIES)
 
 
 def _normalize(data: dict, site: SiteContent) -> dict:
