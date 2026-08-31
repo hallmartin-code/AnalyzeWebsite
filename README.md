@@ -110,6 +110,13 @@ pages, ranked by path token — `investor`, `about`, `team`, `science`, `product
 between requests. Same-domain only; no PDFs, images, or other binaries. Every page fetched is
 listed in a "Pages Reviewed" section at the end of the document.
 
+If the homepage cannot be read, the crawler retries once against the www / apex counterpart
+before giving up — they are separate DNS names and are often configured separately, so a
+lapsed certificate or a parking page on one says nothing about the other. Certificate
+verification stays on for every attempt: a site whose only working host has a bad certificate
+is reported, not routed around. When the fallback is used, the document records the host that
+actually served the content and the analysis carries a crawl note saying why.
+
 **The analysis — two calls, not one.** Model is `claude-sonnet-5`. Responses are constrained
 with `output_config.format`, so the JSON is schema-valid on arrival — no "please return JSON"
 prompting and no defensive parsing.

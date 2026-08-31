@@ -66,6 +66,7 @@ class SiteContent:
     pages: list[Page] = field(default_factory=list)
     ctas: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     def as_prompt_text(self) -> str:
         parts = [
@@ -73,6 +74,8 @@ class SiteContent:
             f"PAGES REVIEWED: {len(self.pages)}"
             + (f" (crawl stopped early: {'; '.join(self.skipped)})" if self.skipped else ""),
         ]
+        if self.notes:
+            parts.append("CRAWL NOTES:\n" + "\n".join(f"- {n}" for n in self.notes))
         if self.ctas:
             parts.append(
                 "NAVIGATION AND CALLS-TO-ACTION (from the homepage chrome):\n"
@@ -102,14 +105,19 @@ def normalize_url(raw: str) -> str:
 def fetch_site(root_url: str, max_pages: int = MAX_PAGES) -> SiteContent:
     """Fetch the homepage and a prioritised sample of internal pages."""
     root_url = normalize_url(root_url)
-    domain = urlparse(root_url).netloc.lower().removeprefix("www.")
-    site = SiteContent(root_url=root_url, domain=domain)
 
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "text/html,*/*"})
     started = time.monotonic()
 
-    html = _get(session, root_url)  # raises FetchError — a dead homepage is fatal
+    # A dead homepage is fatal, but "dead" is worth a second opinion first: the
+    # apex and the www host are routinely configured differently.
+    root_url, html, note = _fetch_homepage(session, root_url)
+    domain = urlparse(root_url).netloc.lower().removeprefix("www.")
+    site = SiteContent(root_url=root_url, domain=domain)
+    if note:
+        site.notes.append(note)
+
     soup = BeautifulSoup(html, "lxml")
 
     site.ctas = _dedupe(
@@ -162,14 +170,89 @@ def fetch_site(root_url: str, max_pages: int = MAX_PAGES) -> SiteContent:
 # --------------------------------------------------------------------------- internals
 
 
+def _host_variants(url: str) -> list[str]:
+    """The URL as given, then its www / apex counterpart.
+
+    People type the bare domain, but the two hosts are separate DNS names and
+    are often configured separately — a lapsed certificate or a parking page on
+    one says nothing about the other. accubreath.com is the case that prompted
+    this: an expired certificate in front of a Wix "domain not connected" 404,
+    while www.accubreath.com served the real site with a valid certificate.
+    """
+    parsed = urlparse(url)
+    host = parsed.netloc
+    if host.lower().startswith("www."):
+        other = host[4:]
+    else:
+        other = f"www.{host}"
+    return [url, urlunparse(parsed._replace(netloc=other))]
+
+
+def _fetch_homepage(session: requests.Session, root_url: str) -> tuple[str, str, str]:
+    """Resolve the homepage, trying the www / apex counterpart before failing.
+
+    Returns (url that worked, its HTML, a note when it was not the one asked
+    for). Certificate verification stays on for every attempt: a site whose
+    only working host has a bad certificate is a finding to report, not one to
+    quietly route around.
+    """
+    failures: list[str] = []
+    for candidate in _host_variants(root_url):
+        try:
+            html = _get(session, candidate)
+        except FetchError as exc:
+            failures.append(str(exc))
+            continue
+
+        if candidate == root_url:
+            return candidate, html, ""
+        return candidate, html, f"{failures[0]} The analysis used {candidate} instead."
+
+    # Lead with the error for the host the user actually asked for.
+    detail = failures[0]
+    if len(failures) > 1:
+        detail += f" The {'apex' if 'www.' in root_url else 'www'} host also failed: {failures[1]}"
+    raise FetchError(detail)
+
+
+def _tls_reason(exc: Exception) -> str:
+    """Plain-English cause of a certificate failure, from the SDK's chained text."""
+    text = str(exc).lower()
+    if "certificate has expired" in text:
+        return "its TLS certificate has expired"
+    if "self signed" in text or "self-signed" in text:
+        return "its TLS certificate is self-signed"
+    if "hostname mismatch" in text or "doesn't match" in text:
+        return "its TLS certificate was issued for a different hostname"
+    if "unable to get local issuer" in text:
+        return "its TLS certificate chain is incomplete"
+    return "its TLS certificate could not be verified"
+
+
+def _connection_reason(exc: Exception) -> str:
+    """Plain-English cause of a failed connection, from urllib3's chained text."""
+    text = str(exc).lower()
+    if "nameresolutionerror" in text or "getaddrinfo" in text or "name or service not known" in text:
+        return "the domain name does not resolve"
+    if "connection refused" in text or "newconnectionerror" in text:
+        return "the server refused the connection"
+    if "connection reset" in text:
+        return "the server closed the connection"
+    return "the connection failed"
+
+
 def _get(session: requests.Session, url: str) -> str:
     try:
         resp = session.get(url, timeout=FETCH_TIMEOUT, allow_redirects=True)
         resp.raise_for_status()
+    # SSLError and ConnectTimeout both subclass ConnectionError, so they have to
+    # be matched before it or their specific wording is lost.
     except requests.exceptions.SSLError as exc:
-        raise FetchError(f"TLS/certificate error for {url}: {exc}") from exc
+        raise FetchError(f"{url} could not be reached securely — {_tls_reason(exc)}.") from exc
     except requests.exceptions.Timeout as exc:
         raise FetchError(f"{url} did not respond within {FETCH_TIMEOUT}s.") from exc
+    except requests.exceptions.ConnectionError as exc:
+        raise FetchError(f"{url} could not be reached — {_connection_reason(exc)}.") from exc
     except requests.exceptions.HTTPError as exc:
         raise FetchError(
             f"{url} returned HTTP {resp.status_code}."
