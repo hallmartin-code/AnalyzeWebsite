@@ -53,16 +53,34 @@ EFFORT = "medium"
 # keep waiting. Attempts now continue for as long as one more call could still
 # finish, with the pause growing each round and capped so the gap between tries
 # stays useful.
-SDK_MAX_RETRIES = 3
+#
+# Tier 1 is deliberately shallow. The SDK retries a timeout as readily as a
+# 500, so with its own ceiling the worst case is timeout x (max_retries + 1) —
+# at the SDK's default 10-minute timeout that is forty minutes inside one
+# `create()` call, long after gunicorn has killed the worker and the proxy has
+# given up ("upstream error"). One fast double-tap is all tier 1 needs to be
+# worth having; tier 2 owns the long game and watches the clock while it does.
+SDK_MAX_RETRIES = 1
 MAX_TRANSIENT_ATTEMPTS = 6
 BACKOFF_SECONDS = (3.0, 8.0, 15.0, 25.0, 40.0)
 
-# Wall-clock ceiling for both analysis calls together. gunicorn kills the worker
-# at 300s and the crawl may already have spent 75s, so retrying past this trades
-# a useful error page for a dead connection. A call needs roughly this long to
-# have any chance of finishing, so we do not start one without room for it.
+# Wall-clock ceiling for both analysis calls together, used when the caller does
+# not supply one. gunicorn kills the worker at 300s, so retrying past this trades
+# a useful error page for a dead connection. app.py passes what is actually left
+# of the request instead of this default — the crawl's own budget is 75s but its
+# last fetch can overshoot, and guessing low here is what left no margin.
+#
+# The budget is a deadline, not a hint: every HTTP attempt is given a timeout cut
+# from the time still remaining (see _attempt_timeout), so the analysis cannot
+# outlive it no matter how the API behaves. A call needs roughly MIN_CALL_SECONDS
+# to have any chance of finishing, so we never start one without room for it.
 ANALYSIS_BUDGET = 190.0
 MIN_CALL_SECONDS = 35.0
+
+# Ceiling on any single HTTP attempt. Well under the SDK's 10-minute default: a
+# schema-constrained Sonnet call on a 60k-char crawl lands in tens of seconds,
+# so a request still running after this is stuck, not slow.
+MAX_CALL_SECONDS = 120.0
 
 # Infrastructure failures worth a second look. RateLimitError is deliberately
 # absent: the SDK already waited out `retry-after`, and a 429 that survives that
@@ -81,11 +99,19 @@ class AnalyzerError(Exception):
     """Raised when an analysis call fails or returns unusable output."""
 
 
-def analyze_site(site: SiteContent, company_name: str | None = None) -> dict:
-    """Run both calls and return the merged, normalized analysis."""
+def analyze_site(
+    site: SiteContent,
+    company_name: str | None = None,
+    budget: float | None = None,
+) -> dict:
+    """Run both calls and return the merged, normalized analysis.
+
+    `budget` is the seconds available for both calls together; the caller
+    passes what is left of the HTTP request so the two agree on the clock.
+    """
     client = _client()
     site_text = site.as_prompt_text()
-    deadline = time.monotonic() + ANALYSIS_BUDGET
+    deadline = time.monotonic() + (ANALYSIS_BUDGET if budget is None else budget)
 
     if company_name:
         naming = f"The company is called {company_name}. Use this exact name in `company_name`."
@@ -152,6 +178,15 @@ def _call(
     attempts = 0
 
     for attempt in range(1, MAX_TRANSIENT_ATTEMPTS + 1):
+        # Checked before the first attempt too, not just between retries. The
+        # second call inherits whatever the first left of the shared deadline,
+        # and _attempt_timeout's floor would otherwise let a doomed attempt run
+        # past it — the overshoot the worker timeout has no patience for.
+        if time.monotonic() > deadline - MIN_CALL_SECONDS:
+            if attempt == 1:
+                raise AnalyzerError(_exhausted_message(label))
+            break
+
         attempts = attempt
         try:
             return _request(
@@ -161,6 +196,7 @@ def _call(
                 site_text=site_text,
                 instruction=instruction,
                 label=label,
+                timeout=_attempt_timeout(deadline),
             )
         except _TRANSIENT as exc:
             last = exc
@@ -207,11 +243,35 @@ def _call(
                 instruction=instruction,
                 label=label,
                 constrained=False,
+                timeout=_attempt_timeout(deadline),
             )
         except Exception as exc:  # noqa: BLE001 - best effort; report the 5xx
             log.warning("%s: ungrammared retry also failed — %s", label, _describe(exc))
 
     raise AnalyzerError(_transient_message(last, label, attempts)) from last
+
+
+def _exhausted_message(label: str) -> str:
+    """When the clock ran out before the step could even be attempted."""
+    return (
+        f"There was not enough time left to run the {label} step before the "
+        "request had to return. The site was slow to read, or an earlier step "
+        "spent the time waiting on the Anthropic API. Please try again."
+    )
+
+
+def _attempt_timeout(deadline: float) -> float:
+    """Seconds one HTTP attempt may take.
+
+    The SDK gets `max_retries` tries of its own inside a single `create()`, so
+    the wall clock for the call is this value times SDK_MAX_RETRIES + 1 — divide
+    the remaining time by that, or the outer deadline means nothing. Floored at
+    MIN_CALL_SECONDS: the caller already refuses to start an attempt without
+    that much room, so a smaller number here could only cut short a call that
+    was going to fit.
+    """
+    remaining = deadline - time.monotonic()
+    return max(MIN_CALL_SECONDS, min(MAX_CALL_SECONDS, remaining / (SDK_MAX_RETRIES + 1)))
 
 
 def _describe(exc: Exception) -> str:
@@ -266,6 +326,7 @@ def _request(
     site_text: str,
     instruction: str,
     label: str,
+    timeout: float,
     constrained: bool = True,
 ) -> dict:
     """One analysis request. Site content is cached across calls.
@@ -287,7 +348,9 @@ def _request(
         )
 
     try:
-        response = client.messages.create(
+        # Per-request, so each attempt is cut from the time actually left rather
+        # than inheriting the SDK's 10-minute default.
+        response = client.with_options(timeout=timeout).messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=[{"type": "text", "text": system}],

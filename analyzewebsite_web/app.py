@@ -10,6 +10,7 @@ import datetime
 import logging
 import os
 import re
+import time
 
 from dotenv import load_dotenv
 from flask import Flask, make_response, render_template, request, send_from_directory
@@ -29,6 +30,19 @@ app.config["MAX_CONTENT_LENGTH"] = 256 * 1024  # form posts only; no uploads
 DOCX_MIMETYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+# Seconds an /analyze request may spend before it must return *something*.
+# gunicorn kills the worker at 300s (see Procfile); a killed worker means no
+# response at all, which the Railway proxy reports to the user as "upstream
+# error" with nothing to act on. Staying under it buys a real error page
+# instead. The remainder covers building and emailing the .docx.
+REQUEST_BUDGET = 240.0
+DOCUMENT_RESERVE = 20.0
+
+# Below this there is no point starting: the analysis is two calls, neither of
+# which can finish in much less than half of it. Saying so beats spending the
+# rest of the worker's life on an attempt that cannot land.
+MIN_ANALYSIS_BUDGET = 70.0
 
 
 def _safe_filename(name: str) -> str:
@@ -86,6 +100,7 @@ def healthz():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
+    started = time.monotonic()
     url = (request.form.get("url") or "").strip()
     company_name = (request.form.get("company_name") or "").strip()
 
@@ -119,8 +134,28 @@ def analyze():
         log.exception("unexpected crawl failure")
         return fail(f"Unexpected error fetching the site: {exc}", 500)
 
+    # What is left after the crawl, minus room to build the document. The crawl
+    # has its own 75s budget but its final fetch can overshoot it, so measure
+    # rather than assume.
+    analysis_budget = REQUEST_BUDGET - (time.monotonic() - started) - DOCUMENT_RESERVE
+    log.info("analysis budget=%.0fs", analysis_budget)
+
+    if analysis_budget < MIN_ANALYSIS_BUDGET:
+        log.warning("crawl left only %.0fs — refusing to start", analysis_budget)
+        return fail(
+            f"Reading {site.root_url or url} took so long that there was no time "
+            "left to analyze it before the request had to return. The site's "
+            "pages are responding slowly — try again, or point the analyzer at a "
+            "smaller section of the site.",
+            504,
+        )
+
     try:
-        data = analyze_site(site, company_name=company_name or None)
+        data = analyze_site(
+            site,
+            company_name=company_name or None,
+            budget=analysis_budget,
+        )
         log.info(
             "analysis done company=%s score=%s",
             data.get("company_name"),
