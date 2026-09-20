@@ -162,22 +162,44 @@ def _footer_run(paragraph, text: str):
 
 
 def _page_number_field(paragraph) -> None:
-    """Insert a live { PAGE } field — python-docx has no API for this."""
-    run = paragraph.add_run()
-    run.font.name = BODY_FONT
-    run.font.size = Pt(FOOTER_PT)
+    """Insert a live { PAGE } field — python-docx has no API for this.
+
+    A field is five runs, not one: begin, the instruction, separate, the cached
+    result, end. Packing all of it into a single run — as this did, and as the
+    other TEN Capital generators still do — is malformed under ECMA-376. Word
+    reads a field with no `separate` as having no result, so the page number
+    comes out blank, and a field it cannot reconcile is the usual trigger for
+    the "unreadable content" repair prompt, which drops the rest of the footer
+    (the logo included) on the way through.
+
+    The cached "1" is what a reader that does not recalculate fields shows;
+    Word replaces it with the real number on open.
+    """
+    def field_run(child):
+        run = paragraph.add_run()
+        run.font.name = BODY_FONT
+        run.font.size = Pt(FOOTER_PT)
+        run._r.append(child)
+        return run
 
     begin = OxmlElement("w:fldChar")
     begin.set(qn("w:fldCharType"), "begin")
+    field_run(begin)
+
     instr = OxmlElement("w:instrText")
     instr.set(qn("xml:space"), "preserve")
     instr.text = "PAGE"
+    field_run(instr)
+
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    field_run(separate)
+
+    _footer_run(paragraph, "1")
+
     end = OxmlElement("w:fldChar")
     end.set(qn("w:fldCharType"), "end")
-
-    run._r.append(begin)
-    run._r.append(instr)
-    run._r.append(end)
+    field_run(end)
 
 
 # --------------------------------------------------------------------- helpers
