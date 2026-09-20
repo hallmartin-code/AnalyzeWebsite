@@ -34,16 +34,28 @@ EFFORT = "medium"
 # transient — so it is worth waiting out rather than throwing away a crawl and
 # (on the second call) a completed, already-billed first call.
 #
-# Two tiers, because they cover different failure shapes:
+# Three tiers, because they cover different failure shapes:
 #
 #   1. The SDK retries 408/409/429/5xx itself, fast and with exponential
 #      backoff, honouring `retry-after`. That handles a single bad routing
 #      attempt. The default is 2 retries; 3 costs nothing when calls succeed.
 #   2. _call adds slower whole-call attempts on top, for a blip that outlives
 #      the SDK's burst — the case that produced "API error 500" here.
+#   3. _call's last attempt drops the structured-output grammar (see
+#      _request). A 5xx that survives every attempt above is often the schema
+#      failing to compile server-side rather than a blip, and that shape of
+#      failure never clears no matter how long we wait.
+#
+# Tier 2 is bounded by the clock, not by an attempt count. A 500 comes back
+# almost instantly, so the previous fixed ladder (3 attempts, 3s then 8s)
+# surrendered after ~15s with ~170s of the budget below still unspent — the
+# user saw "did not recover after 3 attempts" while there was ample room to
+# keep waiting. Attempts now continue for as long as one more call could still
+# finish, with the pause growing each round and capped so the gap between tries
+# stays useful.
 SDK_MAX_RETRIES = 3
-TRANSIENT_ATTEMPTS = 3
-BACKOFF_SECONDS = (3.0, 8.0)
+MAX_TRANSIENT_ATTEMPTS = 6
+BACKOFF_SECONDS = (3.0, 8.0, 15.0, 25.0, 40.0)
 
 # Wall-clock ceiling for both analysis calls together. gunicorn kills the worker
 # at 300s and the crawl may already have spent 75s, so retrying past this trades
@@ -131,10 +143,16 @@ def _call(
     Only the infrastructure failures in _TRANSIENT are retried. Everything else
     — a rejected schema, a bad key, a refusal — fails the same way on attempt
     two as on attempt one, so retrying it would only spend the user's time.
+
+    Attempts stop when the clock runs out rather than at a fixed count, and the
+    last resort drops the response grammar entirely; see the retry policy notes
+    at the top of this module.
     """
     last: Exception | None = None
+    attempts = 0
 
-    for attempt in range(1, TRANSIENT_ATTEMPTS + 1):
+    for attempt in range(1, MAX_TRANSIENT_ATTEMPTS + 1):
+        attempts = attempt
         try:
             return _request(
                 client,
@@ -150,7 +168,7 @@ def _call(
             pause += random.uniform(0, 1)  # de-sync concurrent workers
             remaining = deadline - time.monotonic()
 
-            if attempt == TRANSIENT_ATTEMPTS:
+            if attempt == MAX_TRANSIENT_ATTEMPTS:
                 log.warning("%s: %s — out of attempts", label, _describe(exc))
                 break
             if remaining < pause + MIN_CALL_SECONDS:
@@ -168,11 +186,32 @@ def _call(
                 _describe(exc),
                 pause,
                 attempt,
-                TRANSIENT_ATTEMPTS,
+                MAX_TRANSIENT_ATTEMPTS,
             )
             time.sleep(pause)
 
-    raise AnalyzerError(_transient_message(last, label)) from last
+    # Every constrained attempt failed the same way. A 5xx that survives all of
+    # them is more often the response grammar failing to compile server-side
+    # than a blip — and that shape never clears on its own, so waiting longer
+    # would not have helped. Ask once more without the grammar, spelling the
+    # schema out in the prompt instead. merge_analysis() reads every field
+    # through .get(), so a slightly loose shape degrades rather than breaks.
+    if deadline - time.monotonic() >= MIN_CALL_SECONDS:
+        log.warning("%s: retrying once without the response grammar", label)
+        try:
+            return _request(
+                client,
+                system=system,
+                schema=schema,
+                site_text=site_text,
+                instruction=instruction,
+                label=label,
+                constrained=False,
+            )
+        except Exception as exc:  # noqa: BLE001 - best effort; report the 5xx
+            log.warning("%s: ungrammared retry also failed — %s", label, _describe(exc))
+
+    raise AnalyzerError(_transient_message(last, label, attempts)) from last
 
 
 def _describe(exc: Exception) -> str:
@@ -188,7 +227,7 @@ def _describe(exc: Exception) -> str:
     return " ".join(parts)
 
 
-def _transient_message(exc: Exception | None, label: str) -> str:
+def _transient_message(exc: Exception | None, label: str, attempts: int) -> str:
     """What the user is told when the retries ran out.
 
     Names Anthropic as the source. The previous wording — "Anthropic API error
@@ -210,25 +249,49 @@ def _transient_message(exc: Exception | None, label: str) -> str:
     request_id = getattr(exc, "request_id", None)
     detail = f" Request ID {request_id}." if request_id else ""
     busy = "is temporarily overloaded" if status == 529 else "had an internal error"
+    tries = "1 attempt" if attempts == 1 else f"{attempts} attempts"
     return (
         f"The Anthropic API {busy} (HTTP {status}) and did not recover after "
-        f"{TRANSIENT_ATTEMPTS} attempts, so the {label} step could not finish. "
-        f"This is a fault on Anthropic's side, not a problem with the site you "
-        f"entered. Please try again in a few minutes.{detail}"
+        f"{tries}, so the {label} step could not finish. This is a fault on "
+        f"Anthropic's side, not a problem with the site you entered. Please try "
+        f"again in a few minutes.{detail}"
     )
 
 
-def _request(client, *, system: str, schema: dict, site_text: str, instruction: str, label: str) -> dict:
-    """One schema-constrained request. Site content is cached across calls."""
+def _request(
+    client,
+    *,
+    system: str,
+    schema: dict,
+    site_text: str,
+    instruction: str,
+    label: str,
+    constrained: bool = True,
+) -> dict:
+    """One analysis request. Site content is cached across calls.
+
+    `constrained` picks how the JSON shape is enforced. Normally the schema
+    goes in `output_config.format`, so the API guarantees conforming output.
+    The fallback in _call passes False: effort is kept, the grammar is dropped,
+    and the schema is spelled out in the prompt instead — weaker, but it is the
+    only form left when the grammar itself is what the API is choking on.
+    """
+    output_config: dict = {"effort": EFFORT}
+    if constrained:
+        output_config["format"] = {"type": "json_schema", "schema": schema}
+    else:
+        instruction = (
+            f"{instruction}\n\nReply with a single JSON object and nothing else — "
+            "no prose, no explanation, no markdown code fence. It must match this "
+            f"JSON Schema exactly:\n\n{json.dumps(schema)}"
+        )
+
     try:
         response = client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=[{"type": "text", "text": system}],
-            output_config={
-                "effort": EFFORT,
-                "format": {"type": "json_schema", "schema": schema},
-            },
+            output_config=output_config,
             messages=[
                 {
                     "role": "user",
@@ -292,9 +355,25 @@ def _request(client, *, system: str, schema: dict, site_text: str, instruction: 
     if not text.strip():
         raise AnalyzerError(f"The {label} step returned an empty response.")
     try:
-        return json.loads(text)
+        return json.loads(_unfence(text))
     except json.JSONDecodeError as exc:
         raise AnalyzerError(f"The {label} step returned invalid JSON: {exc}") from exc
+
+
+def _unfence(text: str) -> str:
+    """Strip a ```json fence, if one is there.
+
+    The grammar guarantees bare JSON, so this only ever matters on the
+    ungrammared fallback, where the instruction asks for no fence but nothing
+    enforces it.
+    """
+    text = text.strip()
+    if not text.startswith("```"):
+        return text
+    body = text[3:]
+    if body[:4].lower() == "json":
+        body = body[4:]
+    return body.rsplit("```", 1)[0].strip() if "```" in body else body.strip()
 
 
 def _findings_digest(assessment: dict) -> str:
