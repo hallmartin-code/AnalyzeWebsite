@@ -320,8 +320,9 @@
       <div class="progress" id="progress" role="status" aria-live="polite">
         <div class="progress-track"><div class="progress-bar"></div></div>
         <div class="progress-note">
-          <span>Crawling the site and running the analysis. Keep this tab open — the
-                document downloads automatically.</span>
+          <span>Crawling the site and running the analysis. The document downloads
+                on its own when it is ready — the analysis carries on server-side,
+                so reloading this page is safe.</span>
           <span class="elapsed" id="elapsed">0:00</span>
         </div>
       </div>
@@ -356,22 +357,30 @@
 </div>
 
 <script>
-  // A success is a file download, so the page never navigates and we get no
-  // load event to react to. Drive the indicator on a timer instead, and restore
-  // the form after the server's own ceiling so a stuck run cannot strand it.
+  // The analysis runs on the server as a job; this page only watches it. That
+  // is the point — the document survives a dropped connection because it is
+  // fetched by a request of its own, not carried back by the long one.
   (function () {
     const form = document.getElementById('form');
     const go = document.getElementById('go');
     const progress = document.getElementById('progress');
     const elapsed = document.getElementById('elapsed');
     const keyConfigured = {{ 'true' if key_configured else 'false' }};
+    const jobId = {{ (job_id or '') | tojson }};
     const IDLE_LABEL = 'Generate analysis';
     let ticker = null;
-    let reset = null;
+    let poller = null;
+
+    function busy(label) {
+      go.disabled = true;
+      go.classList.add('working');
+      go.textContent = label;
+      progress.classList.add('on');
+    }
 
     function stop() {
       clearInterval(ticker);
-      clearTimeout(reset);
+      clearInterval(poller);
       go.disabled = !keyConfigured;
       go.classList.remove('working');
       go.textContent = IDLE_LABEL;
@@ -379,26 +388,45 @@
       elapsed.textContent = '0:00';
     }
 
-    form.addEventListener('submit', () => {
-      const started = Date.now();
-      go.disabled = true;
-      go.classList.add('working');
-      go.textContent = 'Analyzing…';
-      progress.classList.add('on');
-
+    function countFrom(started) {
       ticker = setInterval(() => {
         const s = Math.floor((Date.now() - started) / 1000);
         elapsed.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
       }, 1000);
+    }
 
-      // Matches the gunicorn --timeout 300 ceiling; an error instead re-renders
-      // the page, which resets everything anyway.
-      reset = setTimeout(stop, 300000);
-    });
+    // Submitting only starts the job — the server redirects straight back here
+    // with ?job=, so the button just needs to look busy until that lands.
+    form.addEventListener('submit', () => busy('Starting…'));
+
+    if (jobId) {
+      busy('Analyzing…');
+      countFrom(Date.now());
+
+      poller = setInterval(async () => {
+        let state;
+        try {
+          const res = await fetch('/status/' + jobId, {cache: 'no-store'});
+          state = await res.json();
+        } catch (e) {
+          return;  // a blip between polls is not a failure; the next one retries
+        }
+        if (state.state === 'done') {
+          stop();
+          // Navigating to the download leaves this page in place, so the form
+          // is still here if they want another run.
+          window.location = state.download;
+        } else if (state.state !== 'running') {
+          // Failed, or swept. Reload to render the message the job recorded.
+          stop();
+          window.location = '/?job=' + jobId;
+        }
+      }, 2000);
+    }
 
     // Restores the form when the browser serves this page from the back/forward
     // cache after a download.
-    window.addEventListener('pageshow', stop);
+    window.addEventListener('pageshow', (e) => { if (e.persisted) stop(); });
   })();
 </script>
 </body>
